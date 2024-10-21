@@ -1,14 +1,14 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include "UdpSocketHandler.h"
+
 #include <QMainWindow>
 #include <QVideoWidget>
 #include <QPushButton>
 #include <QLabel>
-#include <QUdpSocket>
 #include <QMediaCaptureSession>
 #include <QCamera>
-#include <QHostAddress>
 #include <QTimer>
 
 #include <memory>
@@ -25,12 +25,13 @@ private slots:
   void toggleConnection();
   void toggleMicrophone();
   void toggleCamera();
-  void onSocketReadyRead();
+  void receivedData(const QByteArray &data);
   void sendFrame(const QVideoFrame &frame);
 
 private:
   void setupUi();
   void setupMetricHandler();
+  bool getConnectionParams(QHostAddress& remoteAddress, quint16& remotePort, quint16& localPort);
 
   QVideoWidget *m_localVideoWidget = nullptr;
   QVideoWidget *m_remoteVideoWidget = nullptr;
@@ -52,11 +53,8 @@ private:
   QMediaCaptureSession *m_remoteCaptureSession = nullptr;
   QCamera *m_camera = nullptr;
 
-  std::unique_ptr<QUdpSocket> m_socket;
   bool m_isConnected = false;
-  quint16 m_localPort;
-  quint16 m_remotePort;
-  QHostAddress m_remoteAddress;
+  std::unique_ptr<UdpSocketHandler> m_socketHandler;
 };
 
 #endif // MAINWINDOW_H

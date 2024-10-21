@@ -23,6 +23,8 @@ set(LIBRARY_SOURCES
     MainWindow.cpp
     ConnectionDialog.h
     ConnectionDialog.cpp
+    UdpSocketHandler.h
+    UdpSocketHandler.cpp
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)

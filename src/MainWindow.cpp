@@ -9,7 +9,6 @@
 #include <QBuffer>
 #include <QStatusBar>
 #include <QMessageBox>
-#include <QNetworkDatagram>
 #include <QImage>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -27,46 +26,34 @@ void MainWindow::toggleConnection()
 {
   if (!m_isConnected)
   {
-    ConnectionDialog dialog(this);
-    if (dialog.exec() == QDialog::Accepted)
+    QHostAddress remoteAddress;
+    quint16 remotePort = 0;
+    quint16 localPort = 0;
+
+    if (!getConnectionParams(remoteAddress, remotePort, localPort))
     {
-      m_remoteAddress = QHostAddress(dialog.getRemoteAddress());
-
-      bool ok;
-      m_remotePort = dialog.getRemotePort().toUInt(&ok);
-      if (!ok)
-      {
-        QMessageBox::critical(this, "Ошибка!", "Получен некорректный удаленный порт: " + dialog.getRemotePort());
-        return;
-      }
-
-      m_localPort = dialog.getLocalPort().toUInt(&ok);
-      if (!ok)
-      {
-        QMessageBox::critical(this, "Ошибка!", "Получен некорректный локальный порт: " + dialog.getLocalPort());
-        return;
-      }
-
-      m_socket = std::make_unique<QUdpSocket>();
-      if (!m_socket->bind(m_localPort))
-      {
-        QMessageBox::critical(this, "Ошибка!",
-                              "Не удалось связать сокет с портом " + QString::number(m_localPort) +
-                              ": " + m_socket->errorString());
-        return;
-      }
-
-      m_localPort = m_socket->localPort();
-      connect(m_socket.get(), &QUdpSocket::readyRead, this, &MainWindow::onSocketReadyRead);
-      m_isConnected = true;
-      m_connectionButton->setText("Отключиться");
-      m_localPortLabel->setText("Локальный порт: " + QString::number(m_localPort));
+      return;
     }
+
+    try
+    {
+      m_socketHandler = std::make_unique<UdpSocketHandler>(remoteAddress, remotePort, localPort);
+    }
+    catch (const std::exception& e)
+    {
+      QMessageBox::critical(this, "Ошибка!", e.what());
+      return;
+    }
+
+    connect(m_socketHandler.get(), &UdpSocketHandler::receivedData, this, &MainWindow::receivedData);
+
+    m_isConnected = true;
+    m_connectionButton->setText("Отключиться");
+    m_localPortLabel->setText("Локальный порт: " + QString::number(m_socketHandler->getLocalPort()));
   }
   else
   {
-    m_socket->close();
-    m_socket.reset();
+    m_socketHandler.reset();
     m_isConnected = false;
     m_connectionButton->setText("Подключиться");
     m_localPortLabel->setText("Локальный порт: -----");
@@ -82,33 +69,26 @@ void MainWindow::toggleCamera()
 {
 }
 
-void MainWindow::onSocketReadyRead()
+void MainWindow::receivedData(const QByteArray &data)
 {
-  while (m_socket->hasPendingDatagrams())
-  {
-    // Принимаем сообщение
-    QNetworkDatagram datagram = m_socket->receiveDatagram();
-    auto data = datagram.data();
+  // Формируем изображение
+  QImage img;
+  img.loadFromData(data);
 
-    // Формируем изображение
-    QImage img;
-    img.loadFromData(data);
+  // Формируем кадр
+  auto f = QVideoFrameFormat::pixelFormatFromImageFormat(img.format());
+  QVideoFrameFormat format(img.size(), f);
+  QVideoFrame frame(format);
 
-    // Формируем кадр
-    auto f = QVideoFrameFormat::pixelFormatFromImageFormat(img.format());
-    QVideoFrameFormat format(img.size(), f);
-    QVideoFrame frame(format);
+  // Записываем кадр и выводим на экран
+  frame.map(QVideoFrame::ReadWrite);
+  memcpy(frame.bits(0), img.bits(), img.sizeInBytes());
+  frame.unmap();
+  m_remoteCaptureSession->videoSink()->setVideoFrame(frame);
 
-    // Записываем кадр и выводим на экран
-    frame.map(QVideoFrame::ReadWrite);
-    memcpy(frame.bits(0), img.bits(), img.sizeInBytes());
-    frame.unmap();
-    m_remoteCaptureSession->videoSink()->setVideoFrame(frame);
-
-    // Подсчет метрик
-    ++m_frameCount;
-    m_dataSizeCount += data.size();
-  }
+  // Подсчет метрик
+  ++m_frameCount;
+  m_dataSizeCount += data.size();
 }
 
 void MainWindow::sendFrame(const QVideoFrame &frame)
@@ -118,8 +98,7 @@ void MainWindow::sendFrame(const QVideoFrame &frame)
     QImage img = m_localCaptureSession->videoSink()->videoFrame().toImage();
     QBuffer buffer;
     img.save(&buffer, "JPEG");
-    m_socket->writeDatagram(buffer.data(), m_remoteAddress, m_remotePort);
-    qDebug() << buffer.size();
+    qDebug() << m_socketHandler->sendData(buffer.data());
   }
 }
 
@@ -215,4 +194,32 @@ void MainWindow::setupMetricHandler()
   });
 
   m_timer.start(1000);
+}
+
+bool MainWindow::getConnectionParams(QHostAddress &remoteAddress, quint16 &remotePort, quint16 &localPort)
+{
+  ConnectionDialog dialog(this);
+  if (dialog.exec() != QDialog::Accepted)
+  {
+    return false;
+  }
+
+  remoteAddress = QHostAddress(dialog.getRemoteAddress());
+
+  bool ok;
+  remotePort = dialog.getRemotePort().toUShort(&ok);
+  if (!ok)
+  {
+    QMessageBox::critical(this, "Ошибка!", "Получен некорректный удаленный порт: " + dialog.getRemotePort());
+    return false;
+  }
+
+  localPort = dialog.getLocalPort().toUShort(&ok);
+  if (!ok)
+  {
+    QMessageBox::critical(this, "Ошибка!", "Получен некорректный локальный порт: " + dialog.getLocalPort());
+    return false;
+  }
+
+  return true;
 }
