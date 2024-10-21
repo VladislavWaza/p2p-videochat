@@ -16,6 +16,8 @@ MainWindow::MainWindow(QWidget *parent)
 {
   setupUi();
   setupMetricHandler();
+
+  connect(&m_msgProc, &MessagingProcessor::receivedFrame, this, &MainWindow::onReceivedFrame);
 }
 
 MainWindow::~MainWindow()
@@ -45,7 +47,7 @@ void MainWindow::toggleConnection()
       return;
     }
 
-    connect(m_socketHandler.get(), &UdpSocketHandler::receivedData, this, &MainWindow::receivedData);
+    connect(m_socketHandler.get(), &UdpSocketHandler::receivedData, this, &MainWindow::onReceivedData);
 
     m_isConnected = true;
     m_connectionButton->setText("Отключиться");
@@ -69,36 +71,23 @@ void MainWindow::toggleCamera()
 {
 }
 
-void MainWindow::receivedData(const QByteArray &data)
+void MainWindow::onReceivedData(const QByteArray &data)
 {
-  // Формируем изображение
-  QImage img;
-  img.loadFromData(data);
-
-  // Формируем кадр
-  auto f = QVideoFrameFormat::pixelFormatFromImageFormat(img.format());
-  QVideoFrameFormat format(img.size(), f);
-  QVideoFrame frame(format);
-
-  // Записываем кадр и выводим на экран
-  frame.map(QVideoFrame::ReadWrite);
-  memcpy(frame.bits(0), img.bits(), img.sizeInBytes());
-  frame.unmap();
-  m_remoteCaptureSession->videoSink()->setVideoFrame(frame);
-
-  // Подсчет метрик
-  ++m_frameCount;
   m_dataSizeCount += data.size();
+  m_msgProc.processData(data);
+}
+
+void MainWindow::onReceivedFrame(const QVideoFrame &frame)
+{
+  ++m_frameCount;
+  m_remoteCaptureSession->videoSink()->setVideoFrame(frame);
 }
 
 void MainWindow::sendFrame(const QVideoFrame &frame)
 {
   if (m_isConnected)
   {
-    QImage img = m_localCaptureSession->videoSink()->videoFrame().toImage();
-    QBuffer buffer;
-    img.save(&buffer, "JPEG");
-    qDebug() << m_socketHandler->sendData(buffer.data());
+    qDebug() << m_socketHandler->sendData(m_msgProc.packFrame(frame));
   }
 }
 
